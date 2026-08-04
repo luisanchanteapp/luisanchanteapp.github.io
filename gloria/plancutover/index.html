@@ -286,6 +286,26 @@ body.drag-active .drag-grip{cursor:grabbing;}
 .btn-add:hover{opacity:.85;}
 .btn-add:active{transform:scale(.97);}
 
+/* ── Mandatory fields and export validation ── */
+.required-star{color:var(--accent);font-weight:900;margin-left:4px;font-size:12px;}
+.required-caption{font-size:10px;color:#f6d5d7;margin:-14px 0 12px 2px;line-height:1.4;}
+.is-invalid{
+  border-color:#dc2626!important;
+  box-shadow:0 0 0 4px rgba(220,38,38,.13)!important;
+  background:#fff7f7!important;
+}
+.export-validation{
+  display:none;margin:0 0 12px;padding:13px 15px;border:1px solid #f2a5aa;
+  border-left:4px solid var(--accent);border-radius:12px;background:#fff7f7;
+  color:#7f1d1d;font-size:11px;line-height:1.5;box-shadow:0 10px 24px rgba(237,28,36,.10);
+}
+.export-validation.show{display:block;}
+.export-validation strong{display:block;color:#991b1b;font-size:12px;margin-bottom:5px;}
+.export-validation ul{margin:5px 0 0 18px;padding:0;columns:2;column-gap:28px;}
+.export-validation li{break-inside:avoid;margin:2px 0;}
+@media(max-width:720px){.export-validation ul{columns:1;}}
+.btn-generate[aria-busy="true"]{opacity:.7;cursor:wait;}
+
 /* ── Generate ── */
 .gen-section{margin-top:24px;}
 .btn-generate{
@@ -535,12 +555,12 @@ input[type=date]::-webkit-calendar-picker-indicator{filter:none;cursor:pointer;}
     <div class="planner-grid">
       <div class="field">
         <label>Enlace de la tarea de Planner</label>
-        <input type="url" id="plannerLink" placeholder="Pega aquí el enlace de la tarea de Planner"/>
+        <input type="url" id="plannerLink" placeholder="Pega aquí el enlace de la tarea de Planner" oninput="updateExportValidation()"/>
         <div class="hint">Abre el requerimiento original para consultar comentarios, adjuntos y evidencias.</div>
       </div>
       <div class="field planner-summary-field">
         <label>Resumen de la tarea de Planner</label>
-        <textarea id="plannerSummary" placeholder="Pega aquí el resumen del cambio, las reglas de negocio y el resultado esperado"></textarea>
+        <textarea id="plannerSummary" placeholder="Pega aquí el resumen del cambio, las reglas de negocio y el resultado esperado" oninput="updateExportValidation()"></textarea>
         <div class="hint">Resume qué cambia, por qué se solicita y qué reglas deben cumplirse durante el pase.</div>
       </div>
     </div>
@@ -676,9 +696,15 @@ input[type=date]::-webkit-calendar-picker-indicator{filter:none;cursor:pointer;}
   </div>
 </div>
 
-<!-- ⑧ Generar -->
+<!-- ⑨ Generar -->
 <div class="gen-section">
-  <button class="btn-generate" onclick="generateExcel()">⬇ Generar Plan Cutover en Excel</button>
+  <div class="required-caption"><span class="required-star">*</span> Campos obligatorios. El Excel solo se generará cuando la información requerida y las fechas sean válidas.</div>
+  <div id="exportValidation" class="export-validation" role="alert" aria-live="polite">
+    <strong id="exportValidationTitle">No se puede generar el Excel todavía.</strong>
+    <div>Completa o corrige los siguientes campos:</div>
+    <ul id="exportValidationList"></ul>
+  </div>
+  <button class="btn-generate" id="generateExcelBtn" onclick="generateExcel()">⬇ Generar Plan Cutover en Excel</button>
 </div>
 
 </div>
@@ -695,6 +721,133 @@ let editingIdx  = null;
 let steps = [];
 let lastOwnerCatalog = [];
 const summaryTouched = {objective:false, scope:false, services:false, justification:false, impact:false};
+let exportValidationAttempted = false;
+
+function requiredFieldDefinitions(){
+  const rules=[
+    {id:'artifactName',label:'Notebook / artefacto principal',section:'Artefacto y trazabilidad',kind:'text'},
+    {id:'pipelineName',label:'Pipeline asociado',section:'Artefacto y trazabilidad',kind:'text'},
+    {id:'execObjective',label:'Objetivo',section:'Resumen ejecutivo',kind:'text'},
+    {id:'execScope',label:'Alcance',section:'Resumen ejecutivo',kind:'text'},
+    {id:'execServices',label:'Servicios afectados',section:'Resumen ejecutivo',kind:'text'},
+    {id:'execJustification',label:'Justificación',section:'Resumen ejecutivo',kind:'text'},
+    {id:'execImpact',label:'Impacto del cambio',section:'Resumen ejecutivo',kind:'text'},
+    {id:'plannerLink',label:'Enlace de la tarea de Planner',section:'Planner',kind:'url'},
+    {id:'plannerSummary',label:'Resumen de la tarea de Planner',section:'Planner',kind:'text'},
+    {id:'startDt',label:'Fecha y hora de inicio',section:'Ventana de despliegue',kind:'datetime'}
+  ];
+  if(currentType==='FACT'){
+    rules.push(
+      {id:'paramFechaInicio',label:'Inicio del primer bloque',section:'Variables de recarga',kind:'date'},
+      {id:'paramFechaFin',label:'Fin del primer bloque',section:'Variables de recarga',kind:'date'}
+    );
+    if(isIterativeReload())rules.push({id:'targetMonth',label:'Mes final de cobertura',section:'Variables de recarga',kind:'month'});
+  }
+  return rules;
+}
+function isValidHttpUrl(value){
+  try{
+    const url=new URL(value);
+    return url.protocol==='http:'||url.protocol==='https:';
+  }catch(_){return false;}
+}
+function addValidationError(errors,id,label,message){
+  if(!errors.some(e=>e.id===id&&e.message===message))errors.push({id,label,message});
+}
+function collectExportValidationErrors(){
+  const errors=[];
+  requiredFieldDefinitions().forEach(rule=>{
+    const el=document.getElementById(rule.id);
+    const value=(el?.value||'').trim();
+    if(!value){
+      addValidationError(errors,rule.id,rule.label,`${rule.label}: campo obligatorio.`);
+      return;
+    }
+    if(rule.kind==='url'&&!isValidHttpUrl(value))addValidationError(errors,rule.id,rule.label,`${rule.label}: ingresa un enlace válido que comience con http:// o https://.`);
+    if(rule.kind==='datetime'){
+      const date=new Date(value);
+      if(Number.isNaN(date.getTime()))addValidationError(errors,rule.id,rule.label,`${rule.label}: fecha u hora no válida.`);
+    }
+    if(rule.kind==='date'&&!/^\d{4}-\d{2}-\d{2}$/.test(value))addValidationError(errors,rule.id,rule.label,`${rule.label}: fecha no válida.`);
+    if(rule.kind==='month'&&!/^\d{4}-\d{2}$/.test(value))addValidationError(errors,rule.id,rule.label,`${rule.label}: mes no válido.`);
+  });
+
+  if(currentType==='FACT'){
+    const start=parseDateOnly(v('paramFechaInicio'));
+    const end=parseDateOnly(v('paramFechaFin'));
+    if(start&&end&&start>end)addValidationError(errors,'paramFechaFin','Fin del primer bloque','Fin del primer bloque: debe ser igual o posterior al inicio.');
+    if(isIterativeReload()){
+      const target=parseDateOnly(targetEndLabel());
+      if(end&&target&&target<end)addValidationError(errors,'targetMonth','Mes final de cobertura','Mes final de cobertura: no puede ser anterior al fin del primer bloque.');
+      const plan=estimateIterationPlan();
+      if(!plan.valid)addValidationError(errors,'targetMonth','Mes final de cobertura','Mes final de cobertura: revisa el rango inicial y el mes final seleccionado.');
+    }
+  }
+  return errors;
+}
+function clearValidationStyles(){
+  document.querySelectorAll('.is-invalid').forEach(el=>{
+    el.classList.remove('is-invalid');
+    el.removeAttribute('aria-invalid');
+  });
+}
+function decorateMandatoryFields(){
+  const allIds=[
+    'artifactName','pipelineName','execObjective','execScope','execServices','execJustification','execImpact',
+    'plannerLink','plannerSummary','startDt','paramFechaInicio','paramFechaFin','targetMonth'
+  ];
+  allIds.forEach(id=>{
+    const el=document.getElementById(id);
+    if(!el)return;
+    el.setAttribute('data-required-export','true');
+    const wrapper=el.closest('.field,.exec-field');
+    const label=wrapper?.querySelector('label');
+    if(label&&!label.querySelector('.required-star')){
+      const star=document.createElement('span');
+      star.className='required-star';
+      star.textContent='*';
+      star.title='Campo obligatorio para exportar';
+      label.appendChild(star);
+    }
+  });
+}
+function updateExportValidation(forceShow=false){
+  if(forceShow)exportValidationAttempted=true;
+  const errors=collectExportValidationErrors();
+  const panel=document.getElementById('exportValidation');
+  const list=document.getElementById('exportValidationList');
+  const title=document.getElementById('exportValidationTitle');
+  clearValidationStyles();
+
+  if(exportValidationAttempted&&errors.length){
+    errors.forEach(error=>{
+      const el=document.getElementById(error.id);
+      if(el){el.classList.add('is-invalid');el.setAttribute('aria-invalid','true');}
+    });
+    if(title)title.textContent=`No se puede generar el Excel: ${errors.length} dato${errors.length===1?'':'s'} pendiente${errors.length===1?'':'s'}.`;
+    if(list)list.innerHTML=errors.map(e=>`<li>${escapeHtml(e.message)}</li>`).join('');
+    panel?.classList.add('show');
+  }else{
+    panel?.classList.remove('show');
+    if(list)list.innerHTML='';
+  }
+  return {valid:errors.length===0,errors};
+}
+function validateBeforeExport(){
+  const result=updateExportValidation(true);
+  if(result.valid)return true;
+  const first=document.getElementById(result.errors[0]?.id);
+  first?.scrollIntoView({behavior:'smooth',block:'center'});
+  setTimeout(()=>first?.focus({preventScroll:true}),350);
+  const toast=document.getElementById('toast');
+  if(toast){
+    toast.textContent=`⚠ Completa ${result.errors.length} dato${result.errors.length===1?'':'s'} obligatorio${result.errors.length===1?'':'s'} antes de exportar`;
+    toast.style.background='linear-gradient(135deg,#b9121b,#ed1c24)';
+    toast.classList.add('show');
+    setTimeout(()=>toast.classList.remove('show'),3600);
+  }
+  return false;
+}
 
 const PHASES = {
   ph1:{label:'FASE 1 — PREPARACIÓN DEL PASE', short:'F1·PREP', css:'ph1'},
@@ -1083,7 +1236,7 @@ function syncExecutiveDefaults(force=false){
     if(el && (force || !summaryTouched[key])) el.value=defs[key];
   });
 }
-function markSummaryTouched(key){summaryTouched[key]=true;}
+function markSummaryTouched(key){summaryTouched[key]=true;updateExportValidation();}
 function resetExecutiveSummary(){
   Object.keys(summaryTouched).forEach(k=>summaryTouched[k]=false);
   syncExecutiveDefaults(true);
@@ -1154,6 +1307,7 @@ function updateAll(){
   syncTeamOwners();
   syncExecutiveDefaults(false);
   renderSteps();
+  updateExportValidation();
 }
 function toggleIterativeReload(){
   const active=document.getElementById('iterativeReload')?.checked===true;
@@ -1558,6 +1712,9 @@ function parseDateOnly(value){
 // GENERATE EXCEL
 // ══════════════════════════════════════════════════
 async function generateExcel(){
+  if(!validateBeforeExport())return;
+  const generateBtn=document.getElementById('generateExcelBtn');
+  generateBtn?.setAttribute('aria-busy','true');
   try {
     if(typeof ExcelJS === 'undefined'){
       alert('No se pudo cargar la librería ExcelJS. Verifica tu conexión a internet y vuelve a intentar.');
@@ -2122,6 +2279,8 @@ async function generateExcel(){
   } catch(err) {
     console.error('Error generando Excel:', err);
     alert('Error al generar el Excel: ' + err.message);
+  } finally {
+    generateBtn?.removeAttribute('aria-busy');
   }
 }
 
@@ -2136,6 +2295,7 @@ document.getElementById('targetMonth').value=defaultTargetMonth();
 
 steps=buildSteps('DIM');
 refreshRollbackSelector(true);
+decorateMandatoryFields();
 updateAll();
 </script>
 </body>
