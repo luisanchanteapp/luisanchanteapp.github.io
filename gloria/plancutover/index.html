@@ -2254,17 +2254,21 @@ async function generateExcel(){
     listas.getColumn(2).values = ['Área', 'Ingeniería', 'QA / Validación', 'Despliegue'];
     listas.getColumn(3).values = ['Responsable', ...ownerCatalog];
 
-    // Descargar
+    // Descargar: conserva el nombre completo del artefacto y usa la fecha/hora real del pase.
     const pad2 = n => String(n).padStart(2,'0');
-    const now = new Date();
-    const ds = `${now.getFullYear()}${pad2(now.getMonth()+1)}${pad2(now.getDate())}`;
-    const safeArt = artName.replace(/[^A-Z0-9_]/gi,'_').toUpperCase().slice(0,30);
+    const passDate = new Date(v('startDt'));
+    const passStamp = `${passDate.getFullYear()}${pad2(passDate.getMonth()+1)}${pad2(passDate.getDate())}_${pad2(passDate.getHours())}${pad2(passDate.getMinutes())}`;
+    const safeArt = artName
+      .replace(/[^A-Z0-9_-]/gi,'_')
+      .replace(/_+/g,'_')
+      .replace(/^_+|_+$/g,'')
+      .toUpperCase();
     const buffer = await wb.xlsx.writeBuffer();
     const blob = new Blob([buffer], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `PLAN_CUTOVER_${safeArt}_${ds}.xlsx`;
+    a.download = `PLAN_CUTOVER_${safeArt}_${passStamp}.xlsx`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -2287,10 +2291,8 @@ async function generateExcel(){
 // ══════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════
-const tmr=new Date(); tmr.setDate(tmr.getDate()+1); tmr.setHours(8,0,0,0);
-const p2=n=>String(n).padStart(2,'0');
-document.getElementById('startDt').value=
-  `${tmr.getFullYear()}-${p2(tmr.getMonth()+1)}-${p2(tmr.getDate())}T08:00`;
+// La ventana de despliegue inicia vacía para que el usuario registre la fecha y hora reales del pase.
+document.getElementById('startDt').value='';
 document.getElementById('targetMonth').value=defaultTargetMonth();
 
 steps=buildSteps('DIM');
